@@ -4,7 +4,7 @@ from datetime import datetime
 DB_NAME = "spese.db"
 
 
-# ---------------- DB UTILS ----------------
+# DB UTILS
 def get_connection():
     conn = sqlite3.connect(DB_NAME)
     conn.execute("PRAGMA foreign_keys = ON;")
@@ -13,18 +13,24 @@ def get_connection():
 
 def init_db():
     """
-    Crea le tabelle se non esistono (stesso schema dello script SQL).
-    Utile se vuoi far partire tutto solo con Python.
+    Crea le tabelle se non esistono.
+    Fix inclusi:
+    - data/mese validati con LIKE (corretto per wildcard '_')
+    - categorie uniche case-insensitive tramite UNIQUE INDEX su lower(trim(nome))
     """
     ddl = """
     CREATE TABLE IF NOT EXISTS categorie (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL UNIQUE CHECK (length(trim(nome)) > 0)
+        nome TEXT NOT NULL CHECK (length(trim(nome)) > 0)
     );
+
+    -- Unicità case-insensitive per nome categoria
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_categorie_nome_nocase
+    ON categorie (lower(trim(nome)));
 
     CREATE TABLE IF NOT EXISTS spese (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        data TEXT NOT NULL CHECK (data GLOB '____-__-__'),
+        data TEXT NOT NULL CHECK (data LIKE '____-__-__'),
         importo REAL NOT NULL CHECK (importo > 0),
         categoria_id INTEGER NOT NULL,
         descrizione TEXT,
@@ -35,7 +41,7 @@ def init_db():
 
     CREATE TABLE IF NOT EXISTS budget_mensile (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        mese TEXT NOT NULL CHECK (mese GLOB '____-__'),
+        mese TEXT NOT NULL CHECK (mese LIKE '____-__'),
         categoria_id INTEGER NOT NULL,
         importo REAL NOT NULL CHECK (importo > 0),
         UNIQUE (mese, categoria_id),
@@ -50,7 +56,7 @@ def init_db():
     conn.close()
 
 
-# ---------------- VALIDAZIONI ----------------
+#VALIDAZIONI
 def valida_data_yyyy_mm_dd(s: str) -> bool:
     try:
         datetime.strptime(s, "%Y-%m-%d")
@@ -76,15 +82,21 @@ def leggi_float(prompt: str) -> float | None:
 
 
 def get_categoria_id(nome_categoria: str) -> int | None:
+    """
+    Ricerca categoria in modo case-insensitive.
+    """
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id FROM categorie WHERE nome = ?", (nome_categoria.strip(),))
+    cur.execute(
+        "SELECT id FROM categorie WHERE lower(trim(nome)) = lower(trim(?))",
+        (nome_categoria,),
+    )
     row = cur.fetchone()
     conn.close()
     return row[0] if row else None
 
 
-# ---------------- MODULO 1: CATEGORIE ----------------
+#CATEGORIE
 def gestione_categorie():
     nome = input("Inserisci nome categoria: ").strip()
 
@@ -95,21 +107,27 @@ def gestione_categorie():
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("SELECT 1 FROM categorie WHERE nome = ?", (nome,))
+    # Controllo esistenza case-insensitive
+    cur.execute(
+        "SELECT 1 FROM categorie WHERE lower(trim(nome)) = lower(trim(?))",
+        (nome,),
+    )
     if cur.fetchone():
         print("Errore: la categoria esiste già.")
-    else:
-        try:
-            cur.execute("INSERT INTO categorie (nome) VALUES (?)", (nome,))
-            conn.commit()
-            print("Categoria inserita correttamente.")
-        except sqlite3.IntegrityError as e:
-            print(f"Errore DB: {e}")
+        conn.close()
+        return
 
-    conn.close()
+    try:
+        cur.execute("INSERT INTO categorie (nome) VALUES (?)", (nome,))
+        conn.commit()
+        print("Categoria inserita correttamente.")
+    except sqlite3.IntegrityError as e:
+        print(f"Errore DB: {e}")
+    finally:
+        conn.close()
 
 
-# ---------------- MODULO 2: INSERIMENTO SPESA ----------------
+# INSERIMENTO SPESA 
 def inserisci_spesa():
     data = input("Inserisci data (YYYY-MM-DD): ").strip()
     if not valida_data_yyyy_mm_dd(data):
@@ -148,7 +166,7 @@ def inserisci_spesa():
         conn.close()
 
 
-# ---------------- MODULO 3: BUDGET MENSILE ----------------
+#BUDGET MENSILE 
 def definisci_budget_mensile():
     mese = input("Inserisci mese (YYYY-MM): ").strip()
     if not valida_mese_yyyy_mm(mese):
@@ -172,7 +190,6 @@ def definisci_budget_mensile():
     conn = get_connection()
     cur = conn.cursor()
 
-    # INSERT o UPDATE (UPSERT) su UNIQUE(mese, categoria_id)
     try:
         cur.execute(
             """
@@ -190,7 +207,7 @@ def definisci_budget_mensile():
         conn.close()
 
 
-# ---------------- MODULO 4: REPORT ----------------
+#REPORT SPSE
 def report_totale_spese_per_categoria():
     conn = get_connection()
     cur = conn.cursor()
@@ -299,7 +316,7 @@ def menu_report():
             print("Scelta non valida. Riprovare.")
 
 
-# ---------------- MAIN MENU ----------------
+#MAIN MENU
 def main():
     init_db()
     print("Benvenuto nel Sistema di Gestione delle Spese Personali!\n")
